@@ -2,6 +2,31 @@
 
 One-page cheat sheet for **nginx + PHP-FPM** servers. Full Vietnamese playbook: [../README.md](../README.md).
 
+## PHP2Shell — patch now (CVE-2026-109618 / CVE-2026-109619)
+
+Two critical **unauthenticated RCE** bugs in core PHP, CVSS v4.0 **9.2**, exploited in the wild. Application code (WordPress, Laravel, Drupal…) cannot stop it: the flaw triggers inside the runtime before app code runs. Affects every web-serving setup: PHP-FPM, Apache `mod_php` (highest risk), `php-cgi`, FrankenPHP, LiteSpeed.
+
+| Branch | Minimum fixed release |
+|---|---|
+| 8.5 | **8.5.12** |
+| 8.4 | **8.4.27** |
+| 8.3 | **8.3.36** |
+| 8.2 | **8.2.35** |
+| ≤ 8.1 | no upstream fix — vendor backport or upgrade |
+
+```bash
+# Ubuntu/Debian
+sudo apt update && sudo apt install --only-upgrade 'php8.3-*'
+sudo systemctl restart php8.3-fpm
+# RHEL/Rocky/Alma
+sudo dnf update 'php*' -y && sudo systemctl restart php-fpm
+# also restart mod_php/Apache, FrankenPHP/LiteSpeed, and every CLI/queue worker
+```
+
+**Restarting workers is part of the fix** — CVE-2026-109619 is stale per-process state; an old worker keeps the bug after the package upgrade.
+
+If you cannot patch immediately (temporary, never a substitute): set `memory_limit=-1` via FPM/Apache config **with a cgroup limit**, lower `post_max_size` (8M without uploads / 32M with), set `session.upload_progress.enabled=0`, and restart all workers. On 8.5 also `fatal_error_backtraces=0`. WAF rules only block known paths.
+
 ## PHP support (snapshot: Oct 2026)
 
 Always re-check the official page: <https://www.php.net/supported-versions.php>
@@ -9,10 +34,10 @@ Always re-check the official page: <https://www.php.net/supported-versions.php>
 | Branch | Status | Security fixes until | Latest release noted |
 |---|---|---|---|
 | ≤ 8.1 | **EOL** | past | no more patches |
-| 8.2 | active, nearing EOL | 2026-12-31 | security fixes only |
-| 8.3 | supported (recommended default) | 2027-12-31 | ~8.3.33 |
-| 8.4 | supported, active | 2028-12-31 | ~8.4.25 |
-| 8.5 | supported, active | 2029-12-31 | ~8.5.10 |
+| 8.2 | active, nearing EOL | 2026-12-31 | 8.2.35 |
+| 8.3 | supported (recommended default) | 2027-12-31 | 8.3.36 |
+| 8.4 | supported, active | 2028-12-31 | 8.4.27 |
+| 8.5 | supported, active | 2029-12-31 | 8.5.12 |
 
 Rule of thumb: target **8.3** for a normal site (lowest-risk path from 8.1/8.2); pick **8.4** when the codebase is clean and you want a longer runway.
 

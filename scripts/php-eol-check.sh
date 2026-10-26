@@ -13,6 +13,10 @@
 #
 # So lieu vong doi ghi nhan thang 10/2026 - LUON kiem chung lai tai:
 #   https://www.php.net/supported-versions.php
+#
+# PHP2Shell (CVE-2026-109618 / CVE-2026-109619) - ban va toi thieu:
+#   8.2.35, 8.3.36, 8.4.27, 8.5.12 (phat hanh 21/10/2026)
+#   Nguon: https://www.php.net/archive/2026.php#2026-10-21-5
 
 set -euo pipefail
 export LC_ALL=C
@@ -73,6 +77,55 @@ show_php_version() {
   printf 'Nhan: %s - %s\n' "$branch" "$st"
   if status_needs_warn "$st"; then
     bump
+  fi
+}
+
+# Kiem tra ban va PHP2Shell (CVE-2026-109618 / CVE-2026-109619) theo tung nhan
+check_php2shell() {
+  hr
+  printf '== PHP2Shell (CVE-2026-109618 / CVE-2026-109619) ==\n'
+  local ver branch patch min
+  ver="$(php -r 'echo PHP_VERSION;' 2>/dev/null || true)"
+  if [ -z "$ver" ]; then
+    printf '(khong doc duoc PHP_VERSION - bo qua buoc kiem PHP2Shell)\n'
+    return 0
+  fi
+  branch="$(printf '%s\n' "$ver" | cut -d. -f1-2)"
+  patch="$(printf '%s\n' "$ver" | cut -d. -f3)"
+  patch="${patch%%[!0-9]*}"
+
+  case "$branch" in
+    8.5) min=12 ;;
+    8.4) min=27 ;;
+    8.3) min=36 ;;
+    8.2) min=35 ;;
+    8.1 | 8.0 | 7.* | 5.*)
+      printf '[!] PHP %s: nhanh nay KHONG con ban va upstream cho PHP2Shell.\n' "$ver"
+      printf '[!] Kiem backport cua distro/LTS, hoac nang len 8.3+ ngay.\n'
+      bump
+      return 0
+      ;;
+    8.6)
+      printf '[i] PHP %s: 8.6 RC4 da co fix PHP2Shell; chi dung cho test, khong production.\n' "$ver"
+      return 0
+      ;;
+    *)
+      printf '[i] PHP %s: chua co du lieu ban va cho nhanh nay - kiem chung tai php.net.\n' "$ver"
+      return 0
+      ;;
+  esac
+
+  if [ -z "$patch" ]; then
+    printf '[x] khong doc duoc patch level tu "%s" - tu kiem tra lai.\n' "$ver"
+    bump
+    return 0
+  fi
+  if [ "$patch" -lt "$min" ]; then
+    printf '[!] PHP %s < %s.%s - CHUA VA PHP2Shell (RCE khong xac thuc, CVSS 9.2).\n' "$ver" "$branch" "$min"
+    printf '[!] Cap nhat ngay, sau do restart TOAN BO worker (FPM, mod_php, queue CLI).\n'
+    bump
+  else
+    printf '[i] PHP %s: da co ban va PHP2Shell (toi thieu %s.%s).\n' "$ver" "$branch" "$min"
   fi
 }
 
@@ -195,6 +248,7 @@ summary() {
 }
 
 show_php_version
+check_php2shell
 list_fpm_pools
 check_opcache
 compare_modules
