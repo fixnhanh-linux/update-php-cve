@@ -1,0 +1,65 @@
+; conf/php-fpm-83.pool
+;
+; Mẫu pool PHP-FPM 8.3 chuẩn cho một site WordPress/Laravel cỡ nhỏ-vừa.
+; Đặt ở /etc/php/8.3/fpm/pool.d/<site>.conf (Ubuntu/Debian, service php8.3-fpm)
+; hoặc /etc/php-fpm.d/<site>.conf (RHEL/Rocky/Alma, service php-fpm).
+;
+; Luat theo README chuong 13: CHAY "php-fpm8.3 -t" (Ubuntu/Debian) hoac
+; "php-fpm -t" (RHEL) phải PASS trước khi reload service — xem README chương 13.
+
+[site83]
+
+; --- Chủ thể worker -----------------------------------------------------------
+user = www-data
+group = www-data
+
+; --- Socket unix riêng cho pool này (nginx sẽ fastcgi_pass vào đây) -----------
+listen = /run/php/php8.3-fpm-site.sock
+listen.owner = www-data
+listen.group = www-data
+; listen.mode = 0660
+
+; --- Số lượng worker -----------------------------------------------------------
+; pm = dynamic: worker sinh/thu theo tải, đỡ tốn RAM hơn static khi pool ít request.
+; LƯU Ý RAM: khi chạy song song với pool nhánh cũ (blue-green, README chương 5),
+; hãy GIẢM max_children tạm thời (ví dụ 12 -> 8) rồi mở lại chuẩn sau khi gỡ pool cũ.
+pm = dynamic
+pm.max_children = 8
+pm.start_servers = 3
+pm.min_spare_servers = 2
+pm.max_spare_servers = 6
+pm.max_requests = 500
+pm.process_idle_timeout = 10s
+
+; --- Giám sát -----------------------------------------------------------------
+; Nginx route /status tới fastcgi_pass của pool này rồi curl để xem worker sống ra sao.
+pm.status_path = /status
+ping.path = /ping
+
+; Bắn stack trace của request chậm vào slowlog để truy ra gốc trễ ở pool mới.
+slowlog = /var/log/php8.3-fpm/slow-site.log
+request_slowlog_timeout = 3s
+catch_workers_output = yes
+access.log = /var/log/php8.3-fpm/access-site.log
+
+; --- Giới hạn runtime PHP của pool --------------------------------------------
+php_admin_value[memory_limit] = 192M
+php_admin_value[max_execution_time] = 60
+php_admin_value[max_input_time] = 60
+php_admin_value[upload_max_filesize] = 16M
+php_admin_value[post_max_size] = 32M
+php_admin_value[error_log] = /var/log/php8.3-fpm/error-site.log
+php_admin_flag[log_errors] = on
+php_admin_value[error_reporting] = E_ALL
+; Không bao giờ để hiển thị lỗi ra ngoài trang web khách nhìn thấy:
+php_admin_flag[display_errors] = off
+
+; --- OPcache (bắt buộc bật cho production) --------------------------------------
+php_admin_flag[opcache.enable] = on
+php_admin_value[opcache.memory_consumption] = 128
+php_admin_value[opcache.interned_strings_buffer] = 16
+php_admin_value[opcache.max_accelerated_files] = 12000
+php_admin_value[opcache.revalidate_freq] = 2
+php_admin_flag[opcache.validate_timestamps] = on
+; Với pool mới cài song song, nếu code chưa deploy đủ tốt thì hạ
+; opcache.revalidate_freq trong lúc test để file PHP mới có hiệu lực nhanh hơn.

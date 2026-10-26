@@ -1,4 +1,12 @@
+# Báo cáo do script kiểm tra tạo ra (không commit)
 /report*.txt
+
+# Thư mục làm việc tạm
 /tmp/
+
+# Hệ điều hành / editor
 .DS_Store
 *.swp
+
+# IDE
+.idea/
