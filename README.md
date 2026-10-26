@@ -253,7 +253,9 @@ Mục tiêu: gần như zero downtime, rollback tức thì bằng một dòng ng
 1. **Cài nhánh mới, không đụng nginx** — site không downtime:
 
     ```bash
-    sudo apt install -y php8.3-fpm php8.3-cli ...các module như chương 3.3...
+    sudo apt install -y php8.3-fpm php8.3-cli php8.3-mysql php8.3-curl \
+      php8.3-mbstring php8.3-xml php8.3-gd php8.3-zip php8.3-bcmath \
+      php8.3-intl php8.3-opcache
     ```
 
 2. **Copy pool, giảm `pm.max_children` tạm thời** (ví dụ 12 → 8) để hai pool không bóp RAM. Theo dõi bằng `free -m` và `ps -o rss= -C php-fpm8.3 | awk '{s+=$1} END {print s/1024 " MB"}'`.
@@ -263,7 +265,7 @@ Mục tiêu: gần như zero downtime, rollback tức thì bằng một dòng ng
     ```bash
     sudo php-fpm8.3 -t
     sudo systemctl enable --now php8.3-fpm
-    curl --unix-socket /run/php/php8.3-fpm.sock http://localhost/status
+    systemctl --no-pager --lines=0 status php8.3-fpm
     ```
 
 4. **Đổi `fastcgi_pass`**, giữ dòng cũ làm chú thích để rollback một phím:
