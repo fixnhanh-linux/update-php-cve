@@ -217,6 +217,124 @@ Sau khi vá xong: **bỏ `memory_limit = -1`**, trả lại giới hạn bình t
 
 WAF (Cloudflare hoặc tương đương) có thể chặn một phần traffic khai thác đã biết, nhưng chỉ là biện pháp cầm máu — không được coi là đã an toàn.
 
+### 2.4.1. Khi nhánh đã EOL, không có binary patch
+
+"Không có bản vá" chỉ đúng với **release chính thức**. Vẫn còn ba đường, ưu tiên từ trên xuống:
+
+1. **Backport của vendor** — kiểm tra đúng mã CVE trong changelog:
+
+    ```bash
+    apt changelog php8.1-fpm 2>/dev/null | grep -i 'CVE-2026-10961'
+    dnf updateinfo info 2>/dev/null | grep -B2 -A4 'CVE-2026-10961'
+    ```
+
+    Ubuntu Pro/ESM, RHEL ELS, CloudLinux và các LTS vendor thường có backport. Có thì vá như bình thường, nhớ restart worker.
+
+2. **Source-backport của PHP** — các nhánh `PHP-7.4-CVE-2026-109618-109619`, `PHP-8.0-...`, `PHP-8.1-...` trên php-src:
+
+    ```bash
+    git clone --depth 1 -b PHP-8.1-CVE-2026-109618-109619 \
+      https://github.com/php/php-src.git
+    php -i | grep 'Configure Command'    # giữ đúng flag khi build lại
+    ```
+
+    Chỉ build trên staging/container, **không** ghi đè binary hệ thống đang chạy. Đây là bản vá thật nhưng bạn tự chịu trách nhiệm build và test.
+
+3. **Chuyển sang nhánh còn hỗ trợ** — container PHP 8.3/8.4 đặt trước app cũ, hoặc blue-green ở [chương 6](#6-nâng-nhánh-8182-lên-83-theo-kiểu-blue-green). Đây là đường bền vững duy nhất.
+
+Nếu cả ba đều không khả thi, chuyển sang **chế độ cách ly** dưới đây và đặt deadline nâng cấp. Đừng để "tạm thời" thành vĩnh viễn.
+
+### 2.4.2. Chế độ cách ly khi buộc phải chạy bản chưa vá
+
+Mục tiêu: giảm xác suất chạm đúng đường khai thác, và nếu bị chiếm quyền thì giới hạn thiệt hại. Không biện pháp nào dưới đây thay thế bản vá.
+
+**a) Giới hạn bộ nhớ bằng cgroup (bắt buộc nếu đặt `memory_limit=-1`)**
+
+```bash
+sudo systemctl edit php8.3-fpm
+```
+
+```ini
+[Service]
+MemoryMax=1G
+MemoryHigh=896M
+OOMPolicy=continue
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart php8.3-fpm
+systemctl show php8.3-fpm -p MemoryMax -p MemoryHigh -p OOMPolicy
+```
+
+`OOMPolicy=continue` giữ FPM master sống để respawn worker bị OOM kill, thay vì dừng cả service. Với container, đặt `--memory`/`limits.memory` cho từng container; **không** dùng `RLIMIT_AS`/`RLIMIT_DATA`.
+
+**b) Chặn request quá lớn ở nginx**
+
+```nginx
+client_max_body_size 8m;          # 32m nếu app cần upload
+client_body_buffer_size 128k;
+client_header_buffer_size 4k;
+large_client_header_buffers 4 8k;
+```
+
+Giới hạn số field, số part multipart, độ sâu nesting không có sẵn trong nginx — cần WAF/ModSecurity/Coraza hoặc giới hạn ở application gateway.
+
+**c) Cấu hình pool tạm thời**
+
+```ini
+; Thêm vào file pool hiện có, ví dụ /etc/php/8.3/fpm/pool.d/site.conf
+; (không tạo file .conf mới nếu chưa có header [ten-pool])
+php_admin_value[memory_limit] = -1
+php_admin_value[post_max_size] = 8M
+php_admin_value[upload_max_filesize] = 4M
+php_admin_value[max_execution_time] = 30
+php_admin_value[max_input_time] = 30
+php_admin_value[session.upload_progress.enabled] = 0
+
+; Tái chế worker thường xuyên để trạng thái cũ không sống lâu
+; (nếu pool đã có pm.max_requests thì sửa dòng đó, đừng thêm trùng)
+pm.max_requests = 300
+```
+
+```bash
+sudo php-fpm8.3 -t && sudo systemctl restart php8.3-fpm
+```
+
+Sau khi vá: bỏ toàn bộ các dòng thêm tạm, đưa `memory_limit` về giá trị thật (ví dụ 192M) và bật lại upload progress nếu cần.
+
+**d) Giảm thiệt hại nếu bị RCE**
+
+- Chạy FPM bằng user riêng (`www-data`), không dùng chung user với service khác.
+- `open_basedir` giới hạn trong webroot + `/tmp` (test kỹ, dễ vỡ app).
+- Chặn egress của user web (chỉ mở DNS, DB, Redis, SMTP cần thiết) để RCE không gọi ra ngoài.
+- Mount webroot read-only nếu app không cần ghi; tách thư mục uploads ra ngoài webroot và tắt thực thi PHP tại đó:
+
+    ```nginx
+    location ^~ /wp-content/uploads/ {
+        location ~ \.php$ { deny all; }
+    }
+    ```
+
+- Nếu đang dùng Apache `mod_php`, chuyển sang PHP-FPM giảm rủi ro (mod_php là bề mặt nguy hiểm nhất theo PHP), nhưng đây vẫn chỉ là giảm thiểu.
+- Bật/duy trì WAF và rate limit; xin rule PHP2Shell từ nhà cung cấp WAF nếu có.
+
+**e) Theo dõi để phát hiện sớm**
+
+- FPM `slowlog`, `request_slowlog_timeout`, `catch_workers_output = yes`.
+- Alert khi worker restart bất thường, `segfault`, OOM, hoặc process con `sh`/`curl`/`wget` có parent là web server.
+- Theo dõi request body lớn bất thường và chuỗi multipart dị dạng ở access log/WAF.
+
+**Checklist quyết định**
+
+| Tình huống | Việc phải làm |
+|---|---|
+| Có backport vendor | Vá ngay, restart toàn bộ worker |
+| Không có backport, còn 8.1 | Build source-backport trên staging hoặc nâng 8.3 |
+| Không thể vá trong 24–48 giờ | Áp dụng 2.4.1 + 2.4.2, đặt deadline, tăng giám sát |
+| Internet-facing, dữ liệu nhạy cảm/thanh toán, không cách ly được | Cân nhắc đưa về maintenance page cho tới khi vá — RCE không xác thực rủi ro quá cao |
+
+
 ### 2.5. Sau khi vá: kiểm tra và săn dấu vết
 
 Vì đã có khai thác trước ngày vá, đừng dừng ở việc nâng version. Kiểm tra:
